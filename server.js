@@ -1,0 +1,8 @@
+import express from 'express';
+import {getHistoricalRates} from 'dukascopy-node';
+import {fileURLToPath} from 'node:url';
+const app=express();let cache=null,pending=null;
+async function analyze(){const now=new Date();const rows=await getHistoricalRates({instrument:'eurusd',dates:{from:new Date(now-5*86400000),to:now},timeframe:'m5',format:'json'});const bars=rows.map(x=>({t:Number(x.timestamp),c:Number(x.close),h:Number(x.high),l:Number(x.low)})).filter(x=>Object.values(x).every(Number.isFinite)).sort((a,b)=>a.t-b.t);if(bars.length<25)throw Error('Historique insuffisant');const b=bars.at(-1),age=Date.now()-b.t;if(age>20*60000||age<0)throw Error('Dernière bougie périmée ou marché fermé');const avg=n=>bars.slice(-n).reduce((s,x)=>s+x.c,0)/n;const delta=avg(9)-avg(21);const dir=Math.sign(delta);const atr=bars.slice(-14).reduce((s,x)=>s+x.h-x.l,0)/14;if(!(atr>0))throw Error('Volatilité indisponible');return {source:'Dukascopy / calcul BMZ',timestamp:new Date(b.t).toISOString(),retrievedAt:now.toISOString(),price:b.c,direction:dir>0?'Hausse':dir<0?'Baisse':'Neutre',targets:dir?[1,2,3].map(n=>b.c+dir*atr*n):[],invalidation:dir?b.c-dir*atr:null};}
+app.get('/api/analysis',async(req,res)=>{res.set('Cache-Control','no-store');try{if(!cache||Date.now()-Date.parse(cache.retrievedAt)>60000){if(!pending)pending=analyze().then(x=>cache=x).finally(()=>pending=null);await pending;}res.json(cache);}catch(e){res.status(503).json({error:String(e.message||e)});}});
+app.get('/',(req,res)=>res.sendFile(fileURLToPath(new URL('./index.html',import.meta.url))));
+app.listen(process.env.PORT||3000,'0.0.0.0');
